@@ -1,0 +1,216 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 1. Эцэг эхийн мэдээлэл (Auth - Clerk ашиглахгүй)
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String // Hash хийгдсэн нууц үг
+  name      String?
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  children  Child[]
+}
+
+// 2. Хүүхдийн мэдээлэл
+model Child {
+  id       Int     @id @default(autoincrement())
+  name     String
+  pin      String?
+  age      Int?
+  gender   String?
+  parentId Int
+  parent   User    @relation(fields: [parentId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  alerts              Alert[]
+  categorySettings    ChildCategorySetting[]
+  urlSettings         ChildUrlSetting[]
+  history             History[]
+  dailyUsages         DailyUsage[]
+  childTimeLimit      ChildTimeLimit?
+  childAppLimits      ChildAppLimit[]
+  childCategoryLimits ChildCategoryLimit[]
+  childAlwaysAlloweds ChildAlwaysAllowed[]
+  childFocusBlockeds  ChildFocusBlocked[]
+
+  @@index([parentId])
+}
+
+// 3. Ангиллын сан (Сошиал, Тоглоом, Боловсрол г.м)
+model CategoryCatalog {
+  id                    Int                    @id @default(autoincrement())
+  name                  String                 @unique
+  childCategorySettings ChildCategorySetting[]
+  dailyUsages           DailyUsage[]
+}
+
+// 4. Өдрийн хэрэглээний статистик
+// 1 минут тутамд increment хийхэд энэ хүснэгт ашиглагдана.
+model DailyUsage {
+  id         Int             @id @default(autoincrement())
+  childId    Int
+  categoryId Int
+  date       DateTime        @default(now()) @db.Date
+  duration   Int             @default(0)
+  child      Child           @relation(fields: [childId], references: [id], onDelete: Cascade)
+  category   CategoryCatalog @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, categoryId, date])
+}
+
+// 5. Вэбээр аялсан түүх (Reels үзэхэд Domain-оор нь багцалж хадгална)
+model History {
+  id           Int        @id @default(autoincrement())
+  childId      Int
+  fullUrl      String // Хамгийн сүүлд байсан URL (Instagram Reel URL)
+  domain       String // instagram.com
+  title        String?
+  categoryName String
+  duration     Int // Тухайн сайт дээр нийт өнгөрүүлсэн хугацаа
+  visitedAt    DateTime   @default(now())
+  actionTaken  StatusType
+  device       String?
+  child        Child      @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, categoryName])
+  @@index([childId, visitedAt])
+}
+
+// 6. Хүүхдийн тохиргоо (Ангилал болон URL-аар блоклох)
+model ChildCategorySetting {
+  id         Int             @id @default(autoincrement())
+  childId    Int
+  categoryId Int
+  status     StatusType      @default(ALLOWED)
+  timeLimit  Int? // Минутаар
+  category   CategoryCatalog @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  child      Child           @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, categoryId])
+  @@index([childId])
+}
+
+model ChildUrlSetting {
+  id        Int        @id @default(autoincrement())
+  childId   Int
+  urlId     Int
+  status    StatusType @default(ALLOWED)
+  timeLimit Int?
+  child     Child      @relation(fields: [childId], references: [id], onDelete: Cascade)
+  urlInfo   UrlCatalog @relation(fields: [urlId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, urlId])
+  @@index([childId])
+}
+
+model UrlCatalog {
+  id            Int               @id @default(autoincrement())
+  domain        String            @unique
+  categoryName  String
+  safetyScore   Int?
+  tags          String[]
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  childSettings ChildUrlSetting[]
+}
+
+model Alert {
+  id        Int       @id @default(autoincrement())
+  childId   Int
+  type      AlertType
+  message   String
+  isSent    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  child     Child     @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@index([childId, createdAt])
+}
+
+model ChildTimeLimit {
+  id              Int      @id @default(autoincrement())
+  childId         Int      @unique
+  dailyLimit      Int      @default(240)
+  weekdayLimit    Int      @default(180)
+  weekendLimit    Int      @default(300)
+  sessionLimit    Int      @default(60)
+  breakEvery      Int      @default(45)
+  breakDuration   Int      @default(10)
+  focusMode       Boolean  @default(false)
+  downtimeEnabled Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  child           Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+}
+
+model ChildAppLimit {
+  id        Int      @id @default(autoincrement())
+  childId   Int
+  name      String
+  minutes   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  child     Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, name])
+  @@index([childId])
+}
+
+model ChildCategoryLimit {
+  id        Int      @id @default(autoincrement())
+  childId   Int
+  name      String
+  minutes   Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  child     Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, name])
+  @@index([childId])
+}
+
+model ChildAlwaysAllowed {
+  id        Int      @id @default(autoincrement())
+  childId   Int
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  child     Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, name])
+  @@index([childId])
+}
+
+model ChildFocusBlocked {
+  id        Int      @id @default(autoincrement())
+  childId   Int
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  child     Child    @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([childId, name])
+  @@index([childId])
+}
+
+enum StatusType {
+  ALLOWED
+  BLOCKED
+  LIMITED
+}
+
+enum AlertType {
+  DANGEROUS_CONTENT
+  TIME_LIMIT_EXCEEDED
+  SUSPICIOUS_ACTIVITY
+}
