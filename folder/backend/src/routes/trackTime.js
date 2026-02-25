@@ -5,8 +5,6 @@ const {
   getUBTodayDate,
   getUBCurrentTime,
   checkTimeLimit,
-  checkGlobalDailyLimit,
-  checkBedtimeSchedule,
 } = require("../lib/timeUtils");
 
 // Default increment (секунд). Extension богино хугацаа илгээж болно.
@@ -27,15 +25,6 @@ router.post("/", async (req, res) => {
   try {
     const urlObj = new URL(url);
     const domain = urlObj.hostname.replace(/^www\./, "");
-
-    const bedtimeStatus = await checkBedtimeSchedule(Number(childId));
-    if (bedtimeStatus.isBlocked) {
-      return res.json({
-        status: "BLOCK",
-        reason: "BEDTIME_ACTIVE",
-        scheduleType: bedtimeStatus.scheduleType,
-      });
-    }
 
     // 1. Огноог бэлдэх (Цагийг нь 00:00:00 болгох)
     const today = getUBTodayDate();
@@ -114,21 +103,12 @@ router.post("/", async (req, res) => {
     });
 
     // 4. Лимит шалгах
-    const globalStatus = await checkGlobalDailyLimit(Number(childId));
-    if (globalStatus.isBlocked) {
-      return res.json({
-        status: "BLOCK",
-        reason: "DAILY_LIMIT_EXCEEDED",
-        category: categoryName,
-      });
-    }
-
     const timeStatus = await checkTimeLimit(Number(childId), category.id);
 
     if (timeStatus.isBlocked) {
       return res.json({
         status: "BLOCK",
-        reason: "TIME_LIMIT_EXCEEDED",
+        reason: timeStatus.reason || "TIME_LIMIT_EXCEEDED",
         category: categoryName,
       });
     }

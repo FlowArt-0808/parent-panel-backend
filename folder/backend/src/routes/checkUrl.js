@@ -1,130 +1,132 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
+const { adjustSafetyScore, getRuleBasedCategory, getSearchKeywordMatch } = require("../lib/contentRules");
 const { classifyWebsite } = require("../lib/ai");
-const {
-  checkTimeLimit,
-  checkGlobalDailyLimit,
-  checkBedtimeSchedule,
-} = require("../lib/timeUtils");
+const { checkTimeLimit } = require("../lib/timeUtils"); // Өмнө бичсэн цаг шалгах функц
+
+const SAFETY_BLOCK_THRESHOLD = 60;
 
 // POST: /api/check-url
+const ensureCategory = async (name) => {
+  let categoryEntry = await prisma.categoryCatalog.findUnique({
+    where: { name },
+  });
+  if (!categoryEntry) {
+    categoryEntry = await prisma.categoryCatalog.create({ data: { name } });
+  }
+  return categoryEntry;
+};
+
 router.post("/", async (req, res, next) => {
   try {
-    const { childId, url, dryRun } = req.body;
-    const isDryRun = Boolean(dryRun);
+    const { childId, url } = req.body;
 
     if (!childId || !url) {
-      return res.status(400).json({
-        action: "ALLOWED",
-        reason: "INVALID_INPUT",
-        source: "SYSTEM",
-        error: "Missing data",
-      });
+      return res.status(400).json({ action: "ALLOWED", error: "Missing data" });
     }
 
-    // 1. Parse URL
+    // 1. URL Parse хийх
     let domain;
+    let urlObj;
     try {
-      const urlObj = new URL(url);
+      urlObj = new URL(url);
       domain = urlObj.hostname.replace(/^www\./, "");
-    } catch {
-      // Allow invalid/non-http schemes such as chrome://
-      return res.json({ action: "ALLOWED", reason: "NON_HTTP_URL", source: "SYSTEM" });
+    } catch (e) {
+      // Хэрэв URL буруу бол (жишээ нь chrome://) зөвшөөрнө
+      return res.json({ action: "ALLOWED" });
     }
 
-    const bedtimeStatus = await checkBedtimeSchedule(Number(childId));
-    if (bedtimeStatus.isBlocked) {
-      if (!isDryRun) {
-        prisma.history
-          .create({
-            data: {
-              childId: Number(childId),
-              fullUrl: url,
-              domain,
-              categoryName: "Bedtime",
-              actionTaken: "BLOCKED",
-              duration: 0,
-            },
-          })
-          .catch((err) => console.error("History Save Error:", err));
-      }
+    const searchMatch = getSearchKeywordMatch(urlObj, domain);
 
-      return res.json({
-        action: "BLOCK",
-        reason: "BEDTIME_ACTIVE",
-        source: "SYSTEM",
-        domain,
-      });
-    }
-
-    // 2. Find or classify domain
+    // 2. Баазаас (Catalog) хайх
     let catalogEntry = await prisma.urlCatalog.findUnique({
       where: { domain },
     });
 
+    if (searchMatch && !catalogEntry) {
+      const searchCategory = await ensureCategory("Search");
+      catalogEntry = await prisma.urlCatalog.create({
+        data: {
+          domain: domain,
+          categoryName: searchCategory.name,
+          safetyScore: 60,
+          tags: ["Search"],
+        },
+      });
+    }
+
+    // --- Rule-based quick classification ---
     if (!catalogEntry) {
-      console.log(`[AI] Gemini analyzing: ${domain}`);
+      const ruleResult = getRuleBasedCategory(domain);
+      if (ruleResult) {
+        const categoryEntry = await ensureCategory(ruleResult.category);
+        catalogEntry = await prisma.urlCatalog.create({
+          data: {
+            domain: domain,
+            categoryName: categoryEntry.name,
+            safetyScore: ruleResult.safetyScore,
+            tags: [categoryEntry.name],
+          },
+        });
+      }
+    }
+
+    // --- AI ХЭСЭГ ---
+    if (!catalogEntry) {
+      console.log(`🤖 Gemini шинжилж байна: ${domain}`);
       const aiResult = await classifyWebsite(domain);
 
       if (aiResult) {
         try {
-          let categoryEntry = await prisma.categoryCatalog.findUnique({
-            where: { name: aiResult.category },
-          });
+          // A. Категори нь CategoryCatalog-д байгаа эсэхийг шалгах, байхгүй бол үүсгэх
+          const categoryEntry = await ensureCategory(aiResult.category);
 
-          if (!categoryEntry) {
-            categoryEntry = await prisma.categoryCatalog.create({
-              data: { name: aiResult.category },
-            });
-          }
-
+          // B. URL Catalog-д хадгалах
           catalogEntry = await prisma.urlCatalog.create({
             data: {
-              domain,
-              categoryName: aiResult.category,
+              domain: domain,
+              categoryName: categoryEntry.name,
               safetyScore: aiResult.safetyScore,
-              tags: [aiResult.category],
+              tags: [categoryEntry.name],
             },
           });
-          console.log(`[OK] ${domain} -> ${aiResult.category} (${aiResult.safetyScore})`);
+          console.log(
+            `✅ ${domain} -> ${aiResult.category} (${aiResult.safetyScore})`,
+          );
         } catch (dbErr) {
           console.error("Catalog Save Error:", dbErr);
+          // Алдаа гарсан ч кодыг зогсоохгүйгээр default утгаар үргэлжлүүлнэ
           catalogEntry = { categoryName: "Uncategorized", safetyScore: 50 };
         }
       }
     }
 
+    if (catalogEntry) {
+      catalogEntry.safetyScore = adjustSafetyScore(
+        domain,
+        catalogEntry.categoryName,
+        catalogEntry.safetyScore
+      );
+    }
+    // Хэрэв AI болон Баазаас олдоогүй бол
     if (!catalogEntry) {
-      // Keep unknown domains in catalog so later policy checks stay consistent.
-      catalogEntry = await prisma.urlCatalog
-        .create({
-          data: {
-            domain,
-            categoryName: "Uncategorized",
-            safetyScore: 50,
-            tags: ["Uncategorized"],
-          },
-        })
-        .catch(() => ({
-          id: 0,
-          domain,
-          categoryName: "Uncategorized",
-          safetyScore: 50,
-        }));
+      return res.json({ action: "ALLOWED" });
     }
 
-    // 3. Load child settings
+    // 3. ТОХИРГОО ШАЛГАХ (Parallel Query)
     const categoryInfo = await prisma.categoryCatalog.findUnique({
       where: { name: catalogEntry.categoryName },
     });
 
     const [urlSetting, categorySetting] = await Promise.all([
+      // A. Тусгай URL тохиргоо
       prisma.childUrlSetting.findUnique({
         where: {
           childId_urlId: { childId: Number(childId), urlId: catalogEntry.id },
         },
       }),
+      // B. Категорийн тохиргоо
       categoryInfo
         ? prisma.childCategorySetting.findUnique({
             where: {
@@ -137,97 +139,81 @@ router.post("/", async (req, res, next) => {
         : null,
     ]);
 
-    // 4. Decision engine
+    // 4. ШИЙДВЭР ГАРГАХ (Decision Engine)
     let action = "ALLOWED";
     let blockReason = "NONE";
-    let blockSource = "SYSTEM";
-    const hasSafetyScore = typeof catalogEntry.safetyScore === "number";
-    const isCustomDomain = catalogEntry.categoryName === "Custom";
-    const isDangerousScore = hasSafetyScore && catalogEntry.safetyScore < 50;
 
-    // Step 1: AI safety score
-    if (isDangerousScore && !isCustomDomain) {
+    if (searchMatch) {
       action = "BLOCK";
-      blockReason = "DANGEROUS_CONTENT";
-      blockSource = "AI";
+      blockReason = "SEARCH_KEYWORD";
     }
 
-    // Step 2: Category policy
+    // Шат 1: Аюулгүй байдлын оноо
+    if (action !== "BLOCK" && catalogEntry.safetyScore < SAFETY_BLOCK_THRESHOLD) {
+      action = "BLOCK";
+      blockReason = "DANGEROUS_CONTENT";
+    }
+
+    // Шат 2: Категорийн тохиргоо
     if (categorySetting && categorySetting.status === "BLOCKED") {
       action = "BLOCK";
       blockReason = "CATEGORY_BLOCKED";
-      blockSource = categorySetting.timeLimit === -1 ? "AI" : "PARENT";
     }
 
-    // Step 3: URL override policy
+    // Шат 3: Тусгай URL тохиргоо (Override)
     if (urlSetting) {
       if (urlSetting.status === "BLOCKED") {
         action = "BLOCK";
-        blockReason = "URL_BLOCKED";
-        blockSource = urlSetting.timeLimit === -1 ? "AI" : "PARENT";
-      } else if (urlSetting.status === "ALLOWED") {
+        blockReason = "PARENT_BLOCKED";
+      } else if (urlSetting.status === "ALLOWED" && blockReason !== "SEARCH_KEYWORD") {
         action = "ALLOWED";
         blockReason = "PARENT_ALLOWED";
-        blockSource = "PARENT";
       }
     }
 
-    // Step 4: Category time limit
+    // Шат 4: ЦАГИЙН ХЯЗГААР (Time Limit)
+    // Хэрэв хараахан блоклогдоогүй бөгөөд категори олдсон бол цагийг шалгана
     if (action !== "BLOCK" && categoryInfo) {
       const timeStatus = await checkTimeLimit(childId, categoryInfo.id);
+
       if (timeStatus.isBlocked) {
         action = "BLOCK";
-        blockReason = "TIME_LIMIT_EXCEEDED";
-        blockSource = "SYSTEM";
+        blockReason = timeStatus.reason || "TIME_LIMIT_EXCEEDED";
       }
     }
 
-    // Step 5: Global daily limit
-    const globalDailyStatus = await checkGlobalDailyLimit(Number(childId));
-    if (globalDailyStatus.isBlocked) {
-      action = "BLOCK";
-      blockReason = "DAILY_LIMIT_EXCEEDED";
-      blockSource = "SYSTEM";
-    }
-
-    // 6. Alert logging for dangerous sites
-    if (!isDryRun && action === "BLOCK" && isDangerousScore && !isCustomDomain) {
+    // 5. ALERT SYSTEM
+    if (action === "BLOCK" && catalogEntry.safetyScore < SAFETY_BLOCK_THRESHOLD) {
       await prisma.alert
         .create({
           data: {
             childId: Number(childId),
             type: "DANGEROUS_CONTENT",
-            message: `Blocked access to ${catalogEntry.domain}. (${catalogEntry.categoryName})`,
+            message: `${catalogEntry.domain} сайт руу нэвтрэхийг хориглолоо. (${catalogEntry.categoryName})`,
             isSent: false,
           },
         })
         .catch((e) => console.error("Alert error:", e));
     }
 
-    // 7. History logging
-    if (!isDryRun) {
-      const historyAction = action === "BLOCK" ? "BLOCKED" : "ALLOWED";
+    // 6. HISTORY LOGGING
+    const historyAction = action === "BLOCK" ? "BLOCKED" : "ALLOWED";
 
-      prisma.history
-        .create({
-          data: {
-            childId: Number(childId),
-            fullUrl: url,
-            domain,
-            categoryName: catalogEntry.categoryName,
-            actionTaken: historyAction,
-            duration: 0,
-          },
-        })
-        .catch((err) => console.error("History Save Error:", err));
-    }
+    prisma.history
+      .create({
+        data: {
+          childId: Number(childId),
+          fullUrl: url,
+          domain: domain,
+          categoryName: catalogEntry.categoryName,
+          actionTaken: historyAction,
+          duration: 0, // Зөвхөн хандалт, хугацааг trackTime-д тооцно
+        },
+      })
+      .catch((err) => console.error("History Save Error:", err));
 
-    return res.json({
-      action,
-      reason: blockReason,
-      source: blockSource,
-      domain,
-    });
+    // 7. Хариу буцаах
+    return res.json({ action });
   } catch (error) {
     next(error);
   }
