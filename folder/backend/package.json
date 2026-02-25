@@ -4,7 +4,7 @@
   "main": "src/server.js",
   "scripts": {
     "postinstall": "npm run db:generate",
-    "db:generate": "PRISMA_GENERATE_SKIP_AUTOINSTALL=1 prisma generate --schema ../prisma/schema.prisma",
+    "db:generate": "prisma generate --schema ../prisma/schema.prisma",
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "db:push": "npx prisma db push --schema ../prisma/schema.prisma",
