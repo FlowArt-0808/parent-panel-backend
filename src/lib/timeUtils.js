@@ -108,7 +108,12 @@ async function checkTimeLimit(childId, categoryId) {
     Number.isFinite(setting.timeLimit) &&
     setting.timeLimit > 0;
 
-  const hasGlobalLimits = Boolean(childLimit) && (
+  const hasCustomChildLimit = Boolean(childLimit) &&
+    childLimit.createdAt instanceof Date &&
+    childLimit.updatedAt instanceof Date &&
+    childLimit.updatedAt.getTime() !== childLimit.createdAt.getTime();
+
+  const hasGlobalLimits = hasCustomChildLimit && (
     childLimit.downtimeEnabled ||
     (Number.isFinite(childLimit.dailyLimit) && childLimit.dailyLimit > 0) ||
     (Number.isFinite(childLimit.weekdayLimit) && childLimit.weekdayLimit > 0) ||
