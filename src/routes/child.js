@@ -19,6 +19,27 @@ const normalizeTimeZone = (value) => {
 const getDateKey = (value, timeZone) =>
   new Intl.DateTimeFormat("en-CA", { timeZone }).format(value);
 
+const getTimeZoneOffsetMinutes = (value, timeZone) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(value);
+  const year = Number(parts.find((part) => part.type === "year")?.value ?? 0);
+  const month = Number(parts.find((part) => part.type === "month")?.value ?? 1);
+  const day = Number(parts.find((part) => part.type === "day")?.value ?? 1);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  const second = Number(parts.find((part) => part.type === "second")?.value ?? 0);
+  const interpretedUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  return Math.round((interpretedUtc - value.getTime()) / 60000);
+};
+
 const getDayStart = (timeZone, value = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
@@ -29,7 +50,9 @@ const getDayStart = (timeZone, value = new Date()) => {
   const year = Number(parts.find((part) => part.type === "year")?.value ?? 0);
   const month = Number(parts.find((part) => part.type === "month")?.value ?? 1);
   const day = Number(parts.find((part) => part.type === "day")?.value ?? 1);
-  return new Date(Date.UTC(year, month - 1, day));
+  const utcMidnightGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  const offsetMinutes = getTimeZoneOffsetMinutes(utcMidnightGuess, timeZone);
+  return new Date(utcMidnightGuess.getTime() - offsetMinutes * 60 * 1000);
 };
 
 // CREATE child
