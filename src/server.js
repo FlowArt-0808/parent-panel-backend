@@ -6,13 +6,33 @@ const historyRoutes = require("./routes/history");
 const authRoutes = require("./routes/auth");
 const trackTime = require("./routes/trackTime");
 const debug = require("./routes/debug");
+const childRoutes = require("./routes/child");
+const dashboardRoutes = require("./routes/dashboard");
+const blockingRoutes = require("./routes/blocking");
+const timeLimitRoutes = require("./routes/timelimits");
+const aiAssistantRoutes = require("./routes/aiAssistant");
 // Бусад route-уудаа энд нэмнэ
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // --- Middlewares ---
-app.use(cors()); // Frontend болон Extension-оос хандах эрх
+const allowedOrigins = [
+  "https://tsevermongolchuud.vercel.app",
+  "http://localhost:3000",
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+      if (origin.startsWith("chrome-extension://")) return callback(null, true);
+      return callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true,
+  })
+); // Frontend болон Extension-оос хандах эрх
 app.use(express.json()); // JSON дата унших
 
 // --- Routes ---
@@ -21,6 +41,11 @@ app.use("/api/history", historyRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/track-time", trackTime);
 app.use("/api/debug", debug);
+app.use("/api/child", childRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/blocking", blockingRoutes);
+app.use("/api/timelimits", timeLimitRoutes);
+app.use("/api/ai/assistant", aiAssistantRoutes);
 // Бусад route-ууд энд нэмнэ
 
 // Health Check (Сервер ажиллаж байгаа эсэхийг шалгах)
