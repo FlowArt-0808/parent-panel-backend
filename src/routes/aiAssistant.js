@@ -4,9 +4,9 @@ const { getSessionFromRequest, unauthorizedJson } = require("../lib/session");
 
 const router = express.Router();
 
-const ACTION_VERB_REGEX = /(block|ban|limit|set|change|update|restrict)/i;
-const BLOCK_INTENT_REGEX = /(block|ban|restrict)/i;
-const LIMIT_INTENT_REGEX = /(limit|set|change|update|daily|session)/i;
+const ACTION_VERB_REGEX = /\b(block|ban|limit|set|change|update|restrict)\b/i;
+const BLOCK_INTENT_REGEX = /\b(block|ban|restrict)\b/i;
+const LIMIT_INTENT_REGEX = /\b(limit|set|change|update|daily|session)\b/i;
 const TABLE_NOT_FOUND_CODE = "P2021";
 
 const isPrismaTableMissingError = (error) =>
@@ -142,20 +142,19 @@ const buildQuickSummary = async (parentId, selectedChildId) => {
 
   return {
     children,
-    summary: `${summaryLines.join("
-")}
+    summary: `${summaryLines.join("\n")}
 Top domains: ${domainList || "none"}`,
   };
 };
 
 const fallbackAssistant = (message, summary) => {
   const text = message.toLowerCase();
-  const numeric = text.match(/(\d{2,3})\s*(min|minute|minutes|m)/i);
-  const domainMatch = text.match(/([a-z0-9-]+\.)+[a-z]{2,}/i);
+  const numeric = text.match(/(\d{2,3})\s*(min|minute|minutes|m)\b/i);
+  const domainMatch = text.match(/\b([a-z0-9-]+\.)+[a-z]{2,}\b/i);
   const summaryIntentRegex =
-    /(summary|activity|activities|usage|report|reports|safety|risk|internet|online|dashboard)/i;
+    /\b(summary|activity|activities|usage|report|reports|safety|risk|internet|online|dashboard)\b/i;
   const casualChatRegex =
-    /(hello|hi|hey|how are you|joke|story|explain|translate|movie|music|travel|code|help|what is|who is)/i;
+    /\b(hello|hi|hey|how are you|joke|story|explain|translate|movie|music|travel|code|help|what is|who is)\b/i;
 
   if (BLOCK_INTENT_REGEX.test(text) && domainMatch) {
     return {
@@ -392,8 +391,7 @@ Current account summary:
 ${summary}
 
 Recent chat:
-${chatHistory.map((item) => `${item.sender}: ${item.text}`).join("
-")}
+${chatHistory.map((item) => `${item.sender}: ${item.text}`).join("\n")}
 
 User message:
 ${message}`;
@@ -435,8 +433,7 @@ Please confirm before I apply these changes.`,
       executed.length || errors.length
         ? `
 
-${[...executed, ...errors.map((item) => `Could not apply: ${item}`)].join("
-")}`
+${[...executed, ...errors.map((item) => `Could not apply: ${item}`)].join("\n")}`
         : "";
 
     return res.json({
