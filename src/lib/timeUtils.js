@@ -1,6 +1,13 @@
 const prisma = require("./prisma");
 
 const UB_TIMEZONE = "Asia/Ulaanbaatar";
+const TABLE_NOT_FOUND_CODE = "P2021";
+
+const isPrismaTableMissingError = (error) =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  error.code === TABLE_NOT_FOUND_CODE;
 
 const getUBDateParts = (value = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -63,18 +70,20 @@ function isWithinDowntime(nowMinutes, startMinutes, endMinutes) {
 }
 
 async function checkTimeLimit(childId, categoryId) {
+  const numericChildId = Number(childId);
+  const numericCategoryId = Number(categoryId);
   const today = getUBTodayDate();
   const nowMinutes = getUBTimeMinutes();
   const weekday = today.getUTCDay();
   const isWeekend = weekday === 0 || weekday === 6;
   const isDowntimeWeekend = weekday === 5 || weekday === 6 || weekday === 0;
 
-  const [usage, setting, totalUsage, childLimit] = await Promise.all([
+  const [usage, setting, totalUsage, childLimit, categoryInfo] = await Promise.all([
     prisma.dailyUsage.findUnique({
       where: {
         childId_categoryId_date: {
-          childId: Number(childId),
-          categoryId: Number(categoryId),
+          childId: numericChildId,
+          categoryId: numericCategoryId,
           date: today,
         },
       },
@@ -82,31 +91,67 @@ async function checkTimeLimit(childId, categoryId) {
     prisma.childCategorySetting.findUnique({
       where: {
         childId_categoryId: {
-          childId: Number(childId),
-          categoryId: Number(categoryId),
+          childId: numericChildId,
+          categoryId: numericCategoryId,
         },
       },
     }),
     prisma.dailyUsage.aggregate({
       where: {
-        childId: Number(childId),
+        childId: numericChildId,
         date: today,
       },
       _sum: { duration: true },
     }),
     prisma.childTimeLimit.findUnique({
-      where: { childId: Number(childId) },
+      where: { childId: numericChildId },
+    }),
+    prisma.categoryCatalog.findUnique({
+      where: { id: numericCategoryId },
+      select: { name: true },
     }),
   ]);
 
   const usedSeconds = usage ? usage.duration : 0;
   const totalSeconds = totalUsage?._sum?.duration ?? 0;
 
-  const hasCategoryLimit =
+  const legacyCategoryLimitMinutes =
     setting &&
     setting.status === "LIMITED" &&
     Number.isFinite(setting.timeLimit) &&
-    setting.timeLimit > 0;
+    setting.timeLimit > 0
+      ? setting.timeLimit
+      : null;
+
+  let categoryLimitMinutes = null;
+  if (categoryInfo?.name) {
+    try {
+      const categoryLimit = await prisma.childCategoryLimit.findFirst({
+        where: {
+          childId: numericChildId,
+          name: {
+            equals: categoryInfo.name,
+            mode: "insensitive",
+          },
+        },
+        select: { minutes: true },
+      });
+      const parsedMinutes = Number(categoryLimit?.minutes);
+      if (Number.isFinite(parsedMinutes) && parsedMinutes > 0) {
+        categoryLimitMinutes = parsedMinutes;
+      }
+    } catch (error) {
+      if (!isPrismaTableMissingError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const effectiveCategoryLimitMinutes = [legacyCategoryLimitMinutes, categoryLimitMinutes]
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .reduce((min, value) => (min === null ? value : Math.min(min, value)), null);
+
+  const hasCategoryLimit = Number.isFinite(effectiveCategoryLimitMinutes) && effectiveCategoryLimitMinutes > 0;
 
   const hasCustomChildLimit = Boolean(childLimit) &&
     childLimit.createdAt instanceof Date &&
@@ -188,7 +233,7 @@ async function checkTimeLimit(childId, categoryId) {
   }
 
   if (hasCategoryLimit) {
-    const limitSeconds = setting.timeLimit * 60;
+    const limitSeconds = effectiveCategoryLimitMinutes * 60;
     const categoryRemaining = Math.max(0, limitSeconds - usedSeconds);
     remainingCandidates.push(categoryRemaining);
     if (usedSeconds >= limitSeconds) {
