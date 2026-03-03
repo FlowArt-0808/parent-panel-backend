@@ -60,6 +60,68 @@ function getUBTimeMinutes(value = new Date()) {
   return hour * 60 + minute;
 }
 
+
+const DEFAULT_BEDTIME_SCHEDULE = {
+  schoolNightStartMinute: 21 * 60,
+  schoolNightEndMinute: 7 * 60,
+  weekendStartMinute: 22 * 60,
+  weekendEndMinute: 8 * 60,
+};
+
+const toMinuteOfDay = (value, fallbackMinute) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallbackMinute;
+  const rounded = Math.round(numeric);
+  return Math.max(0, Math.min(1439, rounded));
+};
+
+const normalizeBedtimeSchedule = (row) => ({
+  schoolNightStartMinute: toMinuteOfDay(
+    row?.schoolNightStartMinute,
+    DEFAULT_BEDTIME_SCHEDULE.schoolNightStartMinute,
+  ),
+  schoolNightEndMinute: toMinuteOfDay(
+    row?.schoolNightEndMinute,
+    DEFAULT_BEDTIME_SCHEDULE.schoolNightEndMinute,
+  ),
+  weekendStartMinute: toMinuteOfDay(
+    row?.weekendStartMinute,
+    DEFAULT_BEDTIME_SCHEDULE.weekendStartMinute,
+  ),
+  weekendEndMinute: toMinuteOfDay(
+    row?.weekendEndMinute,
+    DEFAULT_BEDTIME_SCHEDULE.weekendEndMinute,
+  ),
+});
+
+const isMissingBedtimeTableError = (error) => {
+  if (isPrismaTableMissingError(error)) return true;
+  const message = typeof error?.message === "string" ? error.message : "";
+  return /ChildBedtimeSchedule|does not exist|no such table/i.test(message);
+};
+
+const getBedtimeSchedule = async (childId) => {
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT
+        "schoolNightStartMinute",
+        "schoolNightEndMinute",
+        "weekendStartMinute",
+        "weekendEndMinute"
+      FROM "ChildBedtimeSchedule"
+      WHERE "childId" = $1
+      LIMIT 1`,
+      childId,
+    );
+    return normalizeBedtimeSchedule(rows?.[0]);
+  } catch (error) {
+    if (isMissingBedtimeTableError(error)) {
+      return normalizeBedtimeSchedule(null);
+    }
+    throw error;
+  }
+};
+
 function isWithinDowntime(nowMinutes, startMinutes, endMinutes) {
   if (!Number.isFinite(startMinutes) || !Number.isFinite(endMinutes)) return false;
   if (startMinutes === endMinutes) return false;
@@ -78,7 +140,7 @@ async function checkTimeLimit(childId, categoryId) {
   const isWeekend = weekday === 0 || weekday === 6;
   const isDowntimeWeekend = weekday === 5 || weekday === 6 || weekday === 0;
 
-  const [usage, setting, totalUsage, childLimit, categoryInfo] = await Promise.all([
+  const [usage, setting, totalUsage, childLimit, categoryInfo, bedtimeSchedule] = await Promise.all([
     prisma.dailyUsage.findUnique({
       where: {
         childId_categoryId_date: {
@@ -110,6 +172,7 @@ async function checkTimeLimit(childId, categoryId) {
       where: { id: numericCategoryId },
       select: { name: true },
     }),
+    getBedtimeSchedule(numericChildId),
   ]);
 
   const usedSeconds = usage ? usage.duration : 0;
@@ -184,9 +247,11 @@ async function checkTimeLimit(childId, categoryId) {
     downtimeWeekendEnd: 480,
   };
 
+  const bedtimeConfig = bedtimeSchedule ?? DEFAULT_BEDTIME_SCHEDULE;
+
   if (hasGlobalLimits && limitConfig.downtimeEnabled) {
-    const start = isDowntimeWeekend ? limitConfig.downtimeWeekendStart : limitConfig.downtimeWeekdayStart;
-    const end = isDowntimeWeekend ? limitConfig.downtimeWeekendEnd : limitConfig.downtimeWeekdayEnd;
+    const start = isDowntimeWeekend ? bedtimeConfig.weekendStartMinute : bedtimeConfig.schoolNightStartMinute;
+    const end = isDowntimeWeekend ? bedtimeConfig.weekendEndMinute : bedtimeConfig.schoolNightEndMinute;
     if (isWithinDowntime(nowMinutes, start, end)) {
       return {
         isBlocked: true,
