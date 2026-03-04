@@ -226,7 +226,6 @@ const buildAssistantContext = async (parentId, selectedChildId) => {
         where: { childId: { in: targetChildIds } },
         select: {
           childId: true,
-          dailyLimit: true,
           weekdayLimit: true,
           weekendLimit: true,
           sessionLimit: true,
@@ -349,7 +348,6 @@ const buildAssistantContext = async (parentId, selectedChildId) => {
           weekdayLimit: toSafeMinutes(limits?.weekdayLimit, 180),
           weekendLimit: toSafeMinutes(limits?.weekendLimit, 300),
           sessionLimit: toSafeMinutes(limits?.sessionLimit, 60),
-          dailyLimit: toSafeMinutes(limits?.dailyLimit, 240),
         },
         topDomains,
         blockedSites,
@@ -607,7 +605,6 @@ const fallbackAssistant = (message, summaryText) => {
 const upsertChildTimeLimitField = async ({ childId, patch }) => {
   const existing = await prisma.childTimeLimit.findUnique({ where: { childId } });
   const base = {
-    dailyLimit: toSafeMinutes(existing?.dailyLimit, 240),
     weekdayLimit: toSafeMinutes(existing?.weekdayLimit, 180),
     weekendLimit: toSafeMinutes(existing?.weekendLimit, 300),
     sessionLimit: toSafeMinutes(existing?.sessionLimit, 60),
@@ -622,12 +619,12 @@ const upsertChildTimeLimitField = async ({ childId, patch }) => {
     ...patch,
   };
 
-  merged.dailyLimit = Math.max(1, Math.round(Math.max(merged.dailyLimit, merged.weekdayLimit, merged.weekendLimit)));
+  const mergedDailyShadowLimit = Math.max(1, Math.round(Math.max(merged.weekdayLimit, merged.weekendLimit)));
 
   await prisma.childTimeLimit.upsert({
     where: { childId },
     update: {
-      dailyLimit: merged.dailyLimit,
+      dailyLimit: mergedDailyShadowLimit,
       weekdayLimit: merged.weekdayLimit,
       weekendLimit: merged.weekendLimit,
       sessionLimit: merged.sessionLimit,
@@ -638,7 +635,7 @@ const upsertChildTimeLimitField = async ({ childId, patch }) => {
     },
     create: {
       childId,
-      dailyLimit: merged.dailyLimit,
+      dailyLimit: mergedDailyShadowLimit,
       weekdayLimit: merged.weekdayLimit,
       weekendLimit: merged.weekendLimit,
       sessionLimit: merged.sessionLimit,

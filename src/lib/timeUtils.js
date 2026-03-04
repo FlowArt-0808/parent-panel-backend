@@ -223,7 +223,6 @@ async function checkTimeLimit(childId, categoryId) {
 
   const hasGlobalLimits = hasCustomChildLimit && (
     childLimit.downtimeEnabled ||
-    (Number.isFinite(childLimit.dailyLimit) && childLimit.dailyLimit > 0) ||
     (Number.isFinite(childLimit.weekdayLimit) && childLimit.weekdayLimit > 0) ||
     (Number.isFinite(childLimit.weekendLimit) && childLimit.weekendLimit > 0)
   );
@@ -237,7 +236,6 @@ async function checkTimeLimit(childId, categoryId) {
   }
 
   const limitConfig = childLimit ?? {
-    dailyLimit: 240,
     weekdayLimit: 180,
     weekendLimit: 300,
     downtimeEnabled: true,
@@ -264,11 +262,8 @@ async function checkTimeLimit(childId, categoryId) {
   let dailyLimitSeconds = null;
   if (hasGlobalLimits) {
     const dayLimitMinutes = isWeekend ? limitConfig.weekendLimit : limitConfig.weekdayLimit;
-    const effectiveDayLimitMinutes = Number.isFinite(dayLimitMinutes) && dayLimitMinutes > 0
-      ? dayLimitMinutes
-      : limitConfig.dailyLimit;
-    dailyLimitSeconds = Number.isFinite(effectiveDayLimitMinutes) && effectiveDayLimitMinutes > 0
-      ? effectiveDayLimitMinutes * 60
+    dailyLimitSeconds = Number.isFinite(dayLimitMinutes) && dayLimitMinutes > 0
+      ? dayLimitMinutes * 60
       : null;
 
     if (dailyLimitSeconds !== null && totalSeconds >= dailyLimitSeconds) {
