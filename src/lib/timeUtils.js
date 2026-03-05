@@ -131,6 +131,38 @@ function isWithinDowntime(nowMinutes, startMinutes, endMinutes) {
   return nowMinutes >= startMinutes || nowMinutes < endMinutes;
 }
 
+const isWeekendDowntimeDay = (weekday) => weekday === 5 || weekday === 6 || weekday === 0;
+
+const resolveDowntimeWindow = (weekday, bedtimeConfig) => {
+  const isWeekendWindow = isWeekendDowntimeDay(weekday);
+  if (isWeekendWindow) {
+    return {
+      start: bedtimeConfig.weekendStartMinute,
+      end: bedtimeConfig.weekendEndMinute,
+    };
+  }
+  return {
+    start: bedtimeConfig.schoolNightStartMinute,
+    end: bedtimeConfig.schoolNightEndMinute,
+  };
+};
+
+const isWithinConfiguredDowntime = (weekday, nowMinutes, bedtimeConfig) => {
+  const todayWindow = resolveDowntimeWindow(weekday, bedtimeConfig);
+  const previousWeekday = weekday === 0 ? 6 : weekday - 1;
+  const previousWindow = resolveDowntimeWindow(previousWeekday, bedtimeConfig);
+
+  const activeFromToday =
+    todayWindow.start < todayWindow.end
+      ? nowMinutes >= todayWindow.start && nowMinutes < todayWindow.end
+      : nowMinutes >= todayWindow.start;
+
+  const activeFromYesterdayOvernight =
+    previousWindow.start > previousWindow.end && nowMinutes < previousWindow.end;
+
+  return activeFromToday || activeFromYesterdayOvernight;
+};
+
 async function checkTimeLimit(childId, categoryId) {
   const numericChildId = Number(childId);
   const numericCategoryId = Number(categoryId);
@@ -138,7 +170,6 @@ async function checkTimeLimit(childId, categoryId) {
   const nowMinutes = getUBTimeMinutes();
   const weekday = today.getUTCDay();
   const isWeekend = weekday === 0 || weekday === 6;
-  const isDowntimeWeekend = weekday === 5 || weekday === 6 || weekday === 0;
 
   const [usage, setting, totalUsage, childLimit, categoryInfo, bedtimeSchedule] = await Promise.all([
     prisma.dailyUsage.findUnique({
@@ -248,9 +279,7 @@ async function checkTimeLimit(childId, categoryId) {
   const bedtimeConfig = bedtimeSchedule ?? DEFAULT_BEDTIME_SCHEDULE;
 
   if (hasGlobalLimits && limitConfig.downtimeEnabled) {
-    const start = isDowntimeWeekend ? bedtimeConfig.weekendStartMinute : bedtimeConfig.schoolNightStartMinute;
-    const end = isDowntimeWeekend ? bedtimeConfig.weekendEndMinute : bedtimeConfig.schoolNightEndMinute;
-    if (isWithinDowntime(nowMinutes, start, end)) {
+    if (isWithinConfiguredDowntime(weekday, nowMinutes, bedtimeConfig)) {
       return {
         isBlocked: true,
         reason: "DOWNTIME",
