@@ -20,6 +20,20 @@ const SOCIAL_MEDIA_DOMAINS = [
   "threads.net",
 ];
 
+const KNOWN_DOMAIN_CLASSIFICATIONS = [
+  { domains: ["youtube.com", "youtu.be"], category: "Entertainment", safetyScore: 75 },
+  { domains: ["netflix.com", "disneyplus.com", "hulu.com", "primevideo.com"], category: "Entertainment", safetyScore: 72 },
+  { domains: ["spotify.com", "music.youtube.com", "soundcloud.com"], category: "Entertainment", safetyScore: 78 },
+  { domains: ["wikipedia.org", "khanacademy.org", "coursera.org", "edx.org"], category: "Education", safetyScore: 92 },
+  { domains: ["google.com", "bing.com", "duckduckgo.com", "yahoo.com", "yandex.com"], category: "Search", safetyScore: 70 },
+  { domains: ["facebook.com", "instagram.com", "tiktok.com", "x.com", "twitter.com", "snapchat.com", "reddit.com", "threads.net"], category: "Social Media", safetyScore: 55 },
+  { domains: ["discord.com", "telegram.org", "whatsapp.com", "messenger.com"], category: "Messaging", safetyScore: 60 },
+  { domains: ["roblox.com", "steampowered.com", "epicgames.com", "minecraft.net"], category: "Games", safetyScore: 62 },
+  { domains: ["amazon.com", "ebay.com", "temu.com", "aliexpress.com"], category: "Shopping", safetyScore: 70 },
+  { domains: ["paypal.com", "stripe.com", "wise.com"], category: "Finance", safetyScore: 82 },
+  { domains: ["who.int", "mayoclinic.org", "webmd.com"], category: "Health", safetyScore: 86 },
+];
+
 const CATEGORY_SCORE_CAPS = {
   Adult: 15,
   Porn: 10,
@@ -141,6 +155,20 @@ const getRuleBasedCategory = (domain) => {
   return null;
 };
 
+const getKnownDomainClassification = (domain) => {
+  if (!domain) return null;
+  for (const rule of KNOWN_DOMAIN_CLASSIFICATIONS) {
+    const matched = rule.domains.find((entry) => domainMatches(domain, entry));
+    if (matched) {
+      return {
+        category: rule.category,
+        safetyScore: rule.safetyScore,
+      };
+    }
+  }
+  return null;
+};
+
 const adjustSafetyScore = (domain, category, score) => {
   let adjusted = Number.isFinite(score) ? score : 50;
 
@@ -159,6 +187,7 @@ const adjustSafetyScore = (domain, category, score) => {
 
 module.exports = {
   adjustSafetyScore,
+  getKnownDomainClassification,
   getRuleBasedCategory,
   getSearchKeywordMatch,
 };

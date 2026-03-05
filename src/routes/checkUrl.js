@@ -1,7 +1,12 @@
 const express = require("express");
 const router = express.Router();
 const prisma = require("../lib/prisma");
-const { adjustSafetyScore, getRuleBasedCategory, getSearchKeywordMatch } = require("../lib/contentRules");
+const {
+  adjustSafetyScore,
+  getKnownDomainClassification,
+  getRuleBasedCategory,
+  getSearchKeywordMatch,
+} = require("../lib/contentRules");
 const { classifyWebsite } = require("../lib/ai");
 const { checkTimeLimit } = require("../lib/timeUtils"); // Өмнө бичсэн цаг шалгах функц
 
@@ -9,11 +14,17 @@ const SAFETY_BLOCK_THRESHOLD = 60;
 
 // POST: /api/check-url
 const ensureCategory = async (name) => {
-  let categoryEntry = await prisma.categoryCatalog.findUnique({
-    where: { name },
+  const trimmed = String(name ?? "").trim();
+  let categoryEntry = await prisma.categoryCatalog.findFirst({
+    where: {
+      name: {
+        equals: trimmed,
+        mode: "insensitive",
+      },
+    },
   });
   if (!categoryEntry) {
-    categoryEntry = await prisma.categoryCatalog.create({ data: { name } });
+    categoryEntry = await prisma.categoryCatalog.create({ data: { name: trimmed } });
   }
   return categoryEntry;
 };
@@ -56,6 +67,22 @@ router.post("/", async (req, res, next) => {
       });
     }
 
+    // --- Known-domain quick classification ---
+    if (!catalogEntry) {
+      const knownResult = getKnownDomainClassification(domain);
+      if (knownResult) {
+        const categoryEntry = await ensureCategory(knownResult.category);
+        catalogEntry = await prisma.urlCatalog.create({
+          data: {
+            domain,
+            categoryName: categoryEntry.name,
+            safetyScore: knownResult.safetyScore,
+            tags: ["KnownDomain", categoryEntry.name],
+          },
+        });
+      }
+    }
+
     // --- Rule-based quick classification ---
     if (!catalogEntry) {
       const ruleResult = getRuleBasedCategory(domain);
@@ -79,16 +106,14 @@ router.post("/", async (req, res, next) => {
 
       if (aiResult) {
         try {
-          // A. Категори нь CategoryCatalog-д байгаа эсэхийг шалгах, байхгүй бол үүсгэх
           const categoryEntry = await ensureCategory(aiResult.category);
 
-          // B. URL Catalog-д хадгалах
           catalogEntry = await prisma.urlCatalog.create({
             data: {
-              domain: domain,
+              domain,
               categoryName: categoryEntry.name,
               safetyScore: aiResult.safetyScore,
-              tags: [categoryEntry.name],
+              tags: ["Gemini", categoryEntry.name],
             },
           });
           console.log(
